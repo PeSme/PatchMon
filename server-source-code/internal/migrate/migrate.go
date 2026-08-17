@@ -68,6 +68,9 @@ func Run(databaseURL string, log *slog.Logger) error {
 	}
 
 	forgetDirtyRecovery(databaseURL)
+	if err := runCustom(databaseURL); err != nil {
+		return err
+	}
 
 	if upErr == migrate.ErrNoChange {
 		_, _ = fmt.Fprintln(os.Stdout, "[migrate] already up to date")
