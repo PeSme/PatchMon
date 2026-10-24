@@ -1,0 +1,97 @@
+# Fork-only: build the PeSme fork image and publish it to GHCR.
+#
+#   ghcr.io/pesme/patchmon-server:latest       newest build of main
+#   ghcr.io/pesme/patchmon-server:<version>    e.g. 2.1.7-pesme.16 (pin/rollback)
+#   ghcr.io/pesme/patchmon-server:sha-<short>
+#
+# The build itself is fork/build.sh, so local and CI builds are identical.
+name: fork-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: fork-image
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream release tags
+        run: git fetch --tags --force https://github.com/PatchMon/PatchMon.git
+
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
+        with:
+          go-version-file: server-source-code/go.mod
+          cache-dependency-path: |
+            server-source-code/go.sum
+            agent-source-code/go.sum
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Resolve version and build inputs
+        id: ctx
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_DHI: ${{ secrets.DHI_USERNAME != '' && secrets.DHI_TOKEN != '' }}
+        run: |
+          echo "version=$(fork/build.sh --print-version)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          # Authenticated lookup; the Dockerfile's anonymous one gets rate-limited on shared runners.
+          echo "ssg=$(gh api repos/ComplianceAsCode/content/releases/latest --jq .tag_name | sed 's/^v//')" >> "$GITHUB_OUTPUT"
+          # Without DHI credentials, use the official image (built on the same hardened base) as the runtime base.
+          if [ "$HAS_DHI" = true ]; then
+            echo "base=" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=ghcr.io/patchmon/patchmon-server:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to dhi.io
+        if: steps.ctx.outputs.base == ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        env:
+          BASE_IMAGE: ${{ steps.ctx.outputs.base }}
+          SSG_VERSION: ${{ steps.ctx.outputs.ssg }}
+          IMAGE: ghcr.io/pesme/patchmon-server
+        run: fork/build.sh --tag ${{ steps.ctx.outputs.version }}
+
+      - name: Push
+        env:
+          IMAGE: ghcr.io/pesme/patchmon-server
+          VERSION: ${{ steps.ctx.outputs.version }}
+          SHORT: ${{ steps.ctx.outputs.short }}
+        run: |
+          docker tag "$IMAGE:$VERSION" "$IMAGE:latest"
+          docker tag "$IMAGE:$VERSION" "$IMAGE:sha-$SHORT"
+          for t in "$VERSION" "sha-$SHORT" latest; do docker push "$IMAGE:$t"; done
+          {
+            echo "### ghcr.io/pesme/patchmon-server:$VERSION"
+            echo "Base: ${{ steps.ctx.outputs.base || 'dhi.io/alpine-base' }} · SSG ${{ steps.ctx.outputs.ssg }}"
+          } >> "$GITHUB_STEP_SUMMARY"

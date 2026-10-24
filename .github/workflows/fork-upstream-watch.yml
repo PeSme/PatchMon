@@ -1,0 +1,70 @@
+# Fork-only: daily check whether upstream PatchMon has moved on.
+#
+# Opens (or updates) one issue "Upstream has new commits" with the commit count,
+# the newest upstream release, and whether the fork's patches still rebase
+# cleanly. It never pushes; run fork/sync.sh locally to actually update.
+name: fork-upstream-watch
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+
+      - name: Compare with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/PatchMon/PatchMon.git
+          git fetch --quiet --tags upstream
+          BASE="$(git merge-base HEAD upstream/main)"
+          BEHIND="$(git rev-list --count "$BASE..upstream/main")"
+          TITLE="Upstream has new commits"
+          EXISTING="$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')"
+
+          if [ "$BEHIND" = 0 ]; then
+            echo "Up to date with upstream/main."
+            [ -n "$EXISTING" ] && gh issue close "$EXISTING" --comment "Fork is up to date with upstream again."
+            exit 0
+          fi
+
+          git config user.name ci && git config user.email ci@localhost
+          git config rerere.enabled true
+          if git -c core.hooksPath=/dev/null rebase --quiet --onto upstream/main "$BASE" HEAD >/dev/null 2>&1; then
+            CLEAN="✅ The fork's patches rebase cleanly. Running \`fork/sync.sh\` should need no manual work."
+          else
+            FILES="$(git diff --name-only --diff-filter=U | sed 's/^/- `/; s/$/`/')"
+            git rebase --abort
+            CLEAN="⚠️ The rebase hits conflicts (CI has no rerere cache, so your local run may resolve some automatically):
+          $FILES"
+          fi
+
+          LATEST="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' upstream/main)"
+          BODY="$(cat <<EOF
+          **$BEHIND** new upstream commit(s) on \`PatchMon/main\` since the last sync. Latest upstream release: **$LATEST**.
+
+          $CLEAN
+
+          New upstream commits:
+          $(git log --format='- %h %s' "$BASE..upstream/main" | head -40)
+
+          To update: \`cd PatchMon && fork/sync.sh\` (see fork/README.md).
+          EOF
+          )"
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
