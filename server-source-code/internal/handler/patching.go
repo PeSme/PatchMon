@@ -1312,20 +1312,21 @@ func (h *PatchingHandler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 		assignments, _ := h.assignments.ListByPolicy(r.Context(), p.ID)
 		exclusions, _ := h.exclusions.ListByPolicy(r.Context(), p.ID)
 		out[i] = map[string]interface{}{
-			"id":                 p.ID,
-			"name":               p.Name,
-			"description":        p.Description,
-			"patch_delay_type":   p.PatchDelayType,
-			"delay_minutes":      p.DelayMinutes,
-			"fixed_time_utc":     p.FixedTimeUtc,
-			"timezone":           p.Timezone,
-			"auto_patch_enabled": p.AutoPatchEnabled,
-			"auto_patch_days":    p.AutoPatchDays,
-			"auto_patch_time":    p.AutoPatchTime,
-			"auto_reboot":        p.AutoReboot,
-			"created_at":         pgTimeToISO(p.CreatedAt),
-			"updated_at":         pgTimeToISO(p.UpdatedAt),
-			"_count":             map[string]int{"assignments": len(assignments), "exclusions": len(exclusions)},
+			"id":                        p.ID,
+			"name":                      p.Name,
+			"description":               p.Description,
+			"patch_delay_type":          p.PatchDelayType,
+			"delay_minutes":             p.DelayMinutes,
+			"fixed_time_utc":            p.FixedTimeUtc,
+			"timezone":                  p.Timezone,
+			"auto_patch_enabled":        p.AutoPatchEnabled,
+			"auto_patch_days":           p.AutoPatchDays,
+			"auto_patch_time":           p.AutoPatchTime,
+			"auto_reboot":               p.AutoReboot,
+			"auto_reboot_delay_minutes": p.AutoRebootDelayMinutes,
+			"created_at":                pgTimeToISO(p.CreatedAt),
+			"updated_at":                pgTimeToISO(p.UpdatedAt),
+			"_count":                    map[string]int{"assignments": len(assignments), "exclusions": len(exclusions)},
 		}
 	}
 	JSON(w, http.StatusOK, out)
@@ -1370,21 +1371,22 @@ func (h *PatchingHandler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	JSON(w, http.StatusOK, map[string]interface{}{
-		"id":                 policy.ID,
-		"name":               policy.Name,
-		"description":        policy.Description,
-		"patch_delay_type":   policy.PatchDelayType,
-		"delay_minutes":      policy.DelayMinutes,
-		"fixed_time_utc":     policy.FixedTimeUtc,
-		"timezone":           policy.Timezone,
-		"auto_patch_enabled": policy.AutoPatchEnabled,
-		"auto_patch_days":    policy.AutoPatchDays,
-		"auto_patch_time":    policy.AutoPatchTime,
-		"auto_reboot":        policy.AutoReboot,
-		"created_at":         pgTimeToISO(policy.CreatedAt),
-		"updated_at":         pgTimeToISO(policy.UpdatedAt),
-		"assignments":        assignmentsResp,
-		"exclusions":         exclusions,
+		"id":                        policy.ID,
+		"name":                      policy.Name,
+		"description":               policy.Description,
+		"patch_delay_type":          policy.PatchDelayType,
+		"delay_minutes":             policy.DelayMinutes,
+		"fixed_time_utc":            policy.FixedTimeUtc,
+		"timezone":                  policy.Timezone,
+		"auto_patch_enabled":        policy.AutoPatchEnabled,
+		"auto_patch_days":           policy.AutoPatchDays,
+		"auto_patch_time":           policy.AutoPatchTime,
+		"auto_reboot":               policy.AutoReboot,
+		"auto_reboot_delay_minutes": policy.AutoRebootDelayMinutes,
+		"created_at":                pgTimeToISO(policy.CreatedAt),
+		"updated_at":                pgTimeToISO(policy.UpdatedAt),
+		"assignments":               assignmentsResp,
+		"exclusions":                exclusions,
 	})
 }
 
@@ -1414,9 +1416,25 @@ func validatePolicyInput(name, patchDelayType string, delayMinutes *int32, fixed
 	return ""
 }
 
+// maxAutoRebootDelayMinutes caps the post-patch reboot delay (24h); the agent
+// clamps to the same bound.
+const maxAutoRebootDelayMinutes = 1440
+
+// rebootDelayOrDefault returns the submitted post-patch reboot delay, or 1
+// minute (the original behaviour) when the client didn't send one.
+func rebootDelayOrDefault(v *int32) int32 {
+	if v == nil {
+		return 1
+	}
+	return *v
+}
+
 // validateAutoPatchInput enforces rules for the automated-patching fields.
 // Returns a 400 error string when malformed; empty string on success.
-func validateAutoPatchInput(enabled bool, days, timeOfDay *string) string {
+func validateAutoPatchInput(enabled bool, days, timeOfDay *string, rebootDelayMinutes *int32) string {
+	if rebootDelayMinutes != nil && (*rebootDelayMinutes < 1 || *rebootDelayMinutes > maxAutoRebootDelayMinutes) {
+		return fmt.Sprintf("auto_reboot_delay_minutes must be between 1 and %d", maxAutoRebootDelayMinutes)
+	}
 	if !enabled {
 		return ""
 	}
@@ -1454,6 +1472,9 @@ func (h *PatchingHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		AutoPatchDays    *string `json:"auto_patch_days"`
 		AutoPatchTime    *string `json:"auto_patch_time"`
 		AutoReboot       bool    `json:"auto_reboot"`
+		// Minutes between a successful automatic run and the reboot; the agent
+		// re-checks that a reboot is still needed when it expires. Default 1.
+		AutoRebootDelayMinutes *int32 `json:"auto_reboot_delay_minutes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		JSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
@@ -1463,7 +1484,7 @@ func (h *PatchingHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		JSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
-	if msg := validateAutoPatchInput(body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime); msg != "" {
+	if msg := validateAutoPatchInput(body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime, body.AutoRebootDelayMinutes); msg != "" {
 		JSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
@@ -1481,26 +1502,27 @@ func (h *PatchingHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		JSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create policy"})
 		return
 	}
-	if err := h.patchPolicies.SetAutoPatchConfig(r.Context(), id, body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime, body.AutoReboot); err != nil {
+	if err := h.patchPolicies.SetAutoPatchConfig(r.Context(), id, body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime, body.AutoReboot, rebootDelayOrDefault(body.AutoRebootDelayMinutes)); err != nil {
 		h.log.Error("patching: set auto-patch config error", "policy_id", id, "error", err)
 		JSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save automated patching settings"})
 		return
 	}
 	policy, _ := h.patchPolicies.GetByID(r.Context(), id)
 	resp := map[string]interface{}{
-		"id":                 id,
-		"name":               body.Name,
-		"description":        body.Description,
-		"patch_delay_type":   body.PatchDelayType,
-		"delay_minutes":      body.DelayMinutes,
-		"fixed_time_utc":     body.FixedTimeUtc,
-		"timezone":           nil,
-		"auto_patch_enabled": body.AutoPatchEnabled,
-		"auto_patch_days":    body.AutoPatchDays,
-		"auto_patch_time":    body.AutoPatchTime,
-		"auto_reboot":        body.AutoReboot,
-		"created_at":         time.Now().UTC().Format(time.RFC3339),
-		"updated_at":         time.Now().UTC().Format(time.RFC3339),
+		"id":                        id,
+		"name":                      body.Name,
+		"description":               body.Description,
+		"patch_delay_type":          body.PatchDelayType,
+		"delay_minutes":             body.DelayMinutes,
+		"fixed_time_utc":            body.FixedTimeUtc,
+		"timezone":                  nil,
+		"auto_patch_enabled":        body.AutoPatchEnabled,
+		"auto_patch_days":           body.AutoPatchDays,
+		"auto_patch_time":           body.AutoPatchTime,
+		"auto_reboot":               body.AutoReboot,
+		"auto_reboot_delay_minutes": rebootDelayOrDefault(body.AutoRebootDelayMinutes),
+		"created_at":                time.Now().UTC().Format(time.RFC3339),
+		"updated_at":                time.Now().UTC().Format(time.RFC3339),
 	}
 	if policy != nil {
 		resp["created_at"] = pgTimeToISO(policy.CreatedAt)
@@ -1530,6 +1552,9 @@ func (h *PatchingHandler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		AutoPatchDays    *string `json:"auto_patch_days"`
 		AutoPatchTime    *string `json:"auto_patch_time"`
 		AutoReboot       bool    `json:"auto_reboot"`
+		// Minutes between a successful automatic run and the reboot; the agent
+		// re-checks that a reboot is still needed when it expires. Default 1.
+		AutoRebootDelayMinutes *int32 `json:"auto_reboot_delay_minutes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		JSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
@@ -1539,7 +1564,7 @@ func (h *PatchingHandler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		JSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
-	if msg := validateAutoPatchInput(body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime); msg != "" {
+	if msg := validateAutoPatchInput(body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime, body.AutoRebootDelayMinutes); msg != "" {
 		JSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
@@ -1553,24 +1578,25 @@ func (h *PatchingHandler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		JSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update policy"})
 		return
 	}
-	if err := h.patchPolicies.SetAutoPatchConfig(r.Context(), id, body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime, body.AutoReboot); err != nil {
+	if err := h.patchPolicies.SetAutoPatchConfig(r.Context(), id, body.AutoPatchEnabled, body.AutoPatchDays, body.AutoPatchTime, body.AutoReboot, rebootDelayOrDefault(body.AutoRebootDelayMinutes)); err != nil {
 		h.log.Error("patching: set auto-patch config error", "policy_id", id, "error", err)
 		JSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save automated patching settings"})
 		return
 	}
 	policy, _ := h.patchPolicies.GetByID(r.Context(), id)
 	resp := map[string]interface{}{
-		"id":                 id,
-		"name":               body.Name,
-		"description":        body.Description,
-		"patch_delay_type":   body.PatchDelayType,
-		"delay_minutes":      body.DelayMinutes,
-		"fixed_time_utc":     body.FixedTimeUtc,
-		"timezone":           nil,
-		"auto_patch_enabled": body.AutoPatchEnabled,
-		"auto_patch_days":    body.AutoPatchDays,
-		"auto_patch_time":    body.AutoPatchTime,
-		"auto_reboot":        body.AutoReboot,
+		"id":                        id,
+		"name":                      body.Name,
+		"description":               body.Description,
+		"patch_delay_type":          body.PatchDelayType,
+		"delay_minutes":             body.DelayMinutes,
+		"fixed_time_utc":            body.FixedTimeUtc,
+		"timezone":                  nil,
+		"auto_patch_enabled":        body.AutoPatchEnabled,
+		"auto_patch_days":           body.AutoPatchDays,
+		"auto_patch_time":           body.AutoPatchTime,
+		"auto_reboot":               body.AutoReboot,
+		"auto_reboot_delay_minutes": rebootDelayOrDefault(body.AutoRebootDelayMinutes),
 	}
 	if policy != nil {
 		resp["created_at"] = pgTimeToISO(policy.CreatedAt)

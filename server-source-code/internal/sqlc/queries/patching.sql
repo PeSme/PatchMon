@@ -333,6 +333,7 @@ SET auto_patch_enabled = sqlc.arg('auto_patch_enabled'),
     auto_patch_days = sqlc.narg('auto_patch_days'),
     auto_patch_time = sqlc.narg('auto_patch_time'),
     auto_reboot = sqlc.arg('auto_reboot'),
+    auto_reboot_delay_minutes = sqlc.arg('auto_reboot_delay_minutes'),
     updated_at = NOW()
 WHERE id = sqlc.arg('id');
 

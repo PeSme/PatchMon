@@ -149,6 +149,9 @@ type RunPatchPayload struct {
 	// the host still flags a pending reboot. Set by policy-driven automatic
 	// runs (patch_policies.auto_reboot); manual runs leave it false.
 	RebootIfRequired bool `json:"reboot_if_required,omitempty"`
+	// RebootDelayMinutes postpones that reboot; the agent re-checks that it is
+	// still needed when the delay expires (patch_policies.auto_reboot_delay_minutes).
+	RebootDelayMinutes int32 `json:"reboot_delay_minutes,omitempty"`
 }
 
 // NewRunPatchTask creates a run_patch task.
@@ -984,6 +987,9 @@ func (h *RunPatchHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	payload := buildRunPatchMessage(p, run, windows, pending)
 	if p.RebootIfRequired && !windows {
 		payload["reboot_if_required"] = true
+		if p.RebootDelayMinutes > 0 {
+			payload["reboot_delay_minutes"] = p.RebootDelayMinutes
+		}
 	}
 	msg, err := json.Marshal(payload)
 	if err != nil {

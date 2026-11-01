@@ -259,6 +259,9 @@ func runServiceLoop(stopCh <-chan struct{}) error {
 	httpClient := client.New(cfgManager, logger)
 	ctx := context.Background()
 
+	// A post-patch reboot deferred by policy survives agent restarts.
+	resumePendingReboot()
+
 	// Get api_id for offset calculation
 	apiID := cfgManager.GetCredentials().APIID
 
@@ -516,7 +519,7 @@ func runServiceLoop(stopCh <-chan struct{}) error {
 					if runtime.GOOS == "windows" {
 						err = runPatchWindows(msg.patchRunID, msg.windowsPatch, msg.patchParseError)
 					} else {
-						err = runPatch(msg.patchRunID, msg.patchType, msg.packageNames, msg.dryRun, msg.rebootIfRequired)
+						err = runPatch(msg.patchRunID, msg.patchType, msg.packageNames, msg.dryRun, msg.rebootIfRequired, msg.rebootDelayMinutes)
 					}
 					switch {
 					case errors.Is(err, errPatchRunStopped):
@@ -2055,6 +2058,7 @@ func connectOnce(out chan<- wsMsg, backoff *time.Duration) (connected bool, err 
 				"package_names":      packageNames,
 				"dry_run":            payload.DryRun,
 				"reboot_if_required": payload.RebootIfRequired,
+				"reboot_delay":       payload.RebootDelayMinutes,
 			})).Info("run_patch received")
 			dispatchWSMessage(out, wsMsg{
 				kind:             "run_patch",
@@ -2063,6 +2067,8 @@ func connectOnce(out chan<- wsMsg, backoff *time.Duration) (connected bool, err 
 				packageNames:     packageNames,
 				dryRun:           payload.DryRun,
 				rebootIfRequired: payload.RebootIfRequired,
+				// Post-patch reboot delay; 0 (older servers) means the default 1 minute.
+				rebootDelayMinutes: payload.RebootDelayMinutes,
 			})
 		case "compliance_scan":
 			// Validate profile ID to prevent command injection
@@ -2687,7 +2693,7 @@ func patchTypeRefusal(pkgManager, patchType string, dryRun bool) string {
 // runPatch runs package manager update and upgrade (patch_all) or install (patch_package).
 // Supports apt-get (Debian/Ubuntu), dnf, yum (RHEL-based), pkg (FreeBSD), pacman (Arch),
 // apk (Alpine) and zypper (openSUSE, SLES). When dryRun is true, simulates and sends dry_run_completed instead of completed.
-func runPatch(patchRunID, patchType string, packageNames []string, dryRun, rebootIfRequired bool) error {
+func runPatch(patchRunID, patchType string, packageNames []string, dryRun, rebootIfRequired bool, rebootDelayMinutes int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -3039,18 +3045,11 @@ func runPatch(patchRunID, patchType string, packageNames []string, dryRun, reboo
 	// only if the host still reports a pending reboot — patching that didn't
 	// touch the kernel/libc leaves the box up. Ordered after the post-patch
 	// report so the refreshed inventory reaches the server before the
-	// connection drops. 1-minute delay gives logged-in users the wall notice
-	// and lets the final WS/HTTP exchanges drain.
+	// connection drops. At least 1 minute: gives logged-in users the wall
+	// notice and lets the final WS/HTTP exchanges drain. Longer policy delays
+	// re-check the need when they expire (deferred_reboot.go).
 	if rebootIfRequired && !dryRun {
-		detector := system.New(logger)
-		if needs, reason := detector.CheckRebootRequired(); needs {
-			logger.WithField("reason", reason).Info("Post-patch reboot required by policy; scheduling reboot")
-			if err := detector.ExecuteReboot(1, "PatchMon post-patch reboot (policy)"); err != nil {
-				logger.WithError(err).Warn("Post-patch reboot scheduling failed")
-			}
-		} else {
-			logger.Info("Post-patch reboot requested by policy but host does not need one; skipping")
-		}
+		schedulePostPatchReboot(rebootDelayMinutes)
 	}
 	return nil
 }

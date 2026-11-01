@@ -8,6 +8,7 @@
 | feat(hosts): standalone reboot action… | [PatchMon#855](https://github.com/PatchMon/PatchMon/pull/855), conflicts resolved against current main |
 | feat(patching): policy-driven automated patching… (+2) | [PatchMon#856](https://github.com/PatchMon/PatchMon/pull/856) |
 | fork: build/sync tooling | `fork/`, `.github/workflows/fork-*.yml` |
+| feat(patching): configurable post-patch reboot delay… | Fork-only: policy setting *Reboot delay*; the agent re-checks that the reboot is still needed when it expires |
 
 See the fork's changes at any time: `git log --oneline upstream/main..main`.
 
@@ -25,6 +26,12 @@ See the fork's changes at any time: `git log --oneline upstream/main..main`.
 * **Reboot job** is resolved through `resolveDBForHost` like the other agent
   jobs on main, and it is skipped while a patch run is active.
 * **sqlc code** was regenerated (sqlc v1.30.0) rather than hand-merged.
+* **Reboot delay (fork-only).** A policy with auto-reboot can wait 1–1440 minutes
+  (`auto_reboot_delay_minutes`, `custom/003`) before rebooting. When the delay
+  expires the agent checks again and skips the reboot if the host no longer needs
+  one, e.g. because its Proxmox host restarted it. The deadline is stored in
+  `pending-reboot.json` next to the agent's `config.yml`, so it survives agent
+  restarts and self-updates. Deadlines missed by more than 30 minutes are dropped.
 
 ## Versioning
 

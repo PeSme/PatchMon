@@ -1360,6 +1360,7 @@ function PoliciesTab() {
 		auto_patch_days: [],
 		auto_patch_time: "03:00",
 		auto_reboot: false,
+		auto_reboot_delay_minutes: 1,
 	});
 	const [expandedPolicyId, setExpandedPolicyId] = useState(null);
 
@@ -1424,6 +1425,7 @@ function PoliciesTab() {
 			auto_patch_days: [],
 			auto_patch_time: "03:00",
 			auto_reboot: false,
+			auto_reboot_delay_minutes: 1,
 		});
 
 	const openCreate = () => {
@@ -1449,6 +1451,7 @@ function PoliciesTab() {
 				: [],
 			auto_patch_time: policy.auto_patch_time || "03:00",
 			auto_reboot: policy.auto_reboot || false,
+			auto_reboot_delay_minutes: policy.auto_reboot_delay_minutes || 1,
 		});
 		setShowModal(true);
 	};
@@ -1482,6 +1485,10 @@ function PoliciesTab() {
 				: null,
 			auto_patch_time: form.auto_patch_enabled ? form.auto_patch_time : null,
 			auto_reboot: form.auto_patch_enabled ? form.auto_reboot : false,
+			auto_reboot_delay_minutes: Math.min(
+				1440,
+				Math.max(1, Number(form.auto_reboot_delay_minutes) || 1),
+			),
 		};
 		if (editingPolicy) {
 			updateMutation.mutate({ id: editingPolicy.id, data: payload });
@@ -1510,7 +1517,7 @@ function PoliciesTab() {
 			.filter(Boolean)
 			.map((d) => dayNames[Number(d.trim())] ?? d)
 			.join(", ");
-		return `Auto: ${days} at ${policy.auto_patch_time} (${orgTimezone})${policy.auto_reboot ? " + reboot" : ""}`;
+		return `Auto: ${days} at ${policy.auto_patch_time} (${orgTimezone})${policy.auto_reboot ? ` + reboot${policy.auto_reboot_delay_minutes > 1 ? ` after ${policy.auto_reboot_delay_minutes} min` : ""}` : ""}`;
 	};
 
 	return (
@@ -1869,11 +1876,36 @@ function PoliciesTab() {
 													Reboot after patching if the host requires it
 												</span>
 											</label>
+											{form.auto_reboot && (
+												<div>
+													<label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-1">
+														Reboot delay (minutes)
+													</label>
+													<input
+														type="number"
+														min={1}
+														max={1440}
+														value={form.auto_reboot_delay_minutes}
+														onChange={(e) =>
+															setForm((f) => ({
+																...f,
+																auto_reboot_delay_minutes: e.target.value,
+															}))
+														}
+														className="w-full rounded border border-secondary-300 dark:border-secondary-600 bg-white dark:bg-secondary-700 text-secondary-900 dark:text-white px-3 py-2"
+													/>
+													<p className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">
+														When the delay expires the host checks again and
+														skips the reboot if it no longer needs one, e.g.
+														because its hypervisor restarted it meanwhile.
+													</p>
+												</div>
+											)}
 											<p className="text-xs text-amber-600 dark:text-amber-400">
-												Hosts reboot ~1 minute after a successful automated
-												patch run, only when a pending reboot is detected
-												(kernel/libc updates). Manual patch runs never trigger
-												this.
+												Hosts reboot after a successful automated patch run
+												(after the delay above), only when a pending reboot is
+												detected (kernel/libc updates). Manual patch runs never
+												trigger this.
 											</p>
 										</>
 									)}
