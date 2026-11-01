@@ -1396,14 +1396,15 @@ func (s *PatchPoliciesStore) Delete(ctx context.Context, id string) error {
 // SetAutoPatchConfig persists the automated-patching schedule of a policy.
 // Kept separate from Update so the legacy CRUD signature stays stable and
 // callers that don't know about auto-patching can't accidentally clear it.
-func (s *PatchPoliciesStore) SetAutoPatchConfig(ctx context.Context, id string, enabled bool, days, timeOfDay *string, autoReboot bool) error {
+func (s *PatchPoliciesStore) SetAutoPatchConfig(ctx context.Context, id string, enabled bool, days, timeOfDay *string, autoReboot bool, rebootDelayMinutes int32) error {
 	d := s.db.DB(ctx)
 	return d.Queries.UpdatePatchPolicyAutoPatch(ctx, db.UpdatePatchPolicyAutoPatchParams{
-		ID:               id,
-		AutoPatchEnabled: enabled,
-		AutoPatchDays:    days,
-		AutoPatchTime:    timeOfDay,
-		AutoReboot:       autoReboot,
+		ID:                     id,
+		AutoPatchEnabled:       enabled,
+		AutoPatchDays:          days,
+		AutoPatchTime:          timeOfDay,
+		AutoReboot:             autoReboot,
+		AutoRebootDelayMinutes: rebootDelayMinutes,
 	})
 }
 

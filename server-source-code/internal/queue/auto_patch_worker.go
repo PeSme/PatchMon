@@ -157,11 +157,12 @@ func (h *AutoPatchDispatchHandler) ProcessTask(ctx context.Context, _ *asynq.Tas
 
 			runID := uuid.New().String()
 			snapshot, _ := json.Marshal(map[string]interface{}{
-				"name":             p.Name,
-				"patch_delay_type": "immediate",
-				"auto_patch":       true,
-				"auto_reboot":      p.AutoReboot,
-				"scheduled_slot":   slot.UTC().Format(time.RFC3339),
+				"name":                      p.Name,
+				"patch_delay_type":          "immediate",
+				"auto_patch":                true,
+				"auto_reboot":               p.AutoReboot,
+				"auto_reboot_delay_minutes": p.AutoRebootDelayMinutes,
+				"scheduled_slot":            slot.UTC().Format(time.RFC3339),
 			})
 			// triggeredByUserID nil = system-initiated; visible in Runs &
 			// History without a username, with the snapshot marking it auto.
@@ -170,11 +171,12 @@ func (h *AutoPatchDispatchHandler) ProcessTask(ctx context.Context, _ *asynq.Tas
 				continue
 			}
 			task, tErr := NewRunPatchTask(RunPatchPayload{
-				HostID:           host.ID,
-				ApiID:            host.ApiID,
-				PatchRunID:       runID,
-				PatchType:        "patch_all",
-				RebootIfRequired: p.AutoReboot,
+				HostID:             host.ID,
+				ApiID:              host.ApiID,
+				PatchRunID:         runID,
+				PatchType:          "patch_all",
+				RebootIfRequired:   p.AutoReboot,
+				RebootDelayMinutes: p.AutoRebootDelayMinutes,
 			})
 			if tErr != nil {
 				h.log.Error("auto_patch: task create failed", "policy", p.Name, "host_id", host.ID, "error", tErr)
@@ -187,7 +189,7 @@ func (h *AutoPatchDispatchHandler) ProcessTask(ctx context.Context, _ *asynq.Tas
 			activeHosts[host.ID] = struct{}{}
 			queued++
 		}
-		h.log.Info("auto_patch: policy fired", "policy", p.Name, "slot", slot.UTC().Format(time.RFC3339), "queued", queued, "skipped", skipped, "auto_reboot", p.AutoReboot)
+		h.log.Info("auto_patch: policy fired", "policy", p.Name, "slot", slot.UTC().Format(time.RFC3339), "queued", queued, "skipped", skipped, "auto_reboot", p.AutoReboot, "auto_reboot_delay_minutes", p.AutoRebootDelayMinutes)
 	}
 	return nil
 }

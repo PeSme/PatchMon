@@ -742,6 +742,7 @@ CREATE TABLE IF NOT EXISTS patch_policies (
     fixed_time_utc TEXT,
     timezone TEXT,
     auto_reboot BOOLEAN NOT NULL DEFAULT false,
+    auto_reboot_delay_minutes INTEGER NOT NULL DEFAULT 1,
     auto_patch_enabled BOOLEAN NOT NULL DEFAULT false,
     auto_patch_days TEXT,
     auto_patch_time TEXT,
